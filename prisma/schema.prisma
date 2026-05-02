@@ -1,0 +1,100 @@
+generator client {
+    provider        = "prisma-client-js"
+    engineType      = "wasm"
+    output          = "../generated/prisma"
+    previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+    provider  = "postgresql"
+    url       = env("DATABASE_URL")
+    directUrl = env("DIRECT_URL")
+}
+
+model Account {
+    id                       String  @id @default(cuid())
+    userId                   String
+    type                     String
+    provider                 String
+    providerAccountId        String
+    refresh_token            String?
+    access_token             String?
+    expires_at               Int?
+    token_type               String?
+    scope                    String?
+    id_token                 String?
+    session_state            String?
+    refresh_token_expires_in Int?
+    user                     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@unique([provider, providerAccountId])
+}
+
+model Session {
+    id           String   @id @default(cuid())
+    sessionToken String   @unique
+    userId       String
+    expires      DateTime
+    user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+    identifier String
+    token      String   @unique
+    expires    DateTime
+
+    @@unique([identifier, token])
+}
+
+model User {
+    id            String       @id @default(cuid())
+    name          String?
+    email         String?      @unique
+    emailVerified DateTime?
+    image         String?
+    accounts      Account[]
+    sessions      Session[]
+    profile       UserProfile?
+    receipts      Receipt[]
+}
+
+model UserProfile {
+    id             String  @id @default(cuid())
+    userId         String  @unique
+    user           User    @relation(fields: [userId], references: [id])
+    profession     String?
+    taxRegime      String  @default("new")
+    monthlyBudgets Json?
+}
+
+model Receipt {
+    id            String     @id @default(cuid())
+    userId        String
+    user          User       @relation(fields: [userId], references: [id])
+    imageUrl      String
+    status        String     @default("processing")
+    merchant      String?
+    date          DateTime?
+    category      String?
+    currency      String     @default("INR")
+    subtotal      Decimal    @default(0)
+    tax           Decimal    @default(0)
+    fees          Decimal    @default(0)
+    fines         Decimal    @default(0)
+    total         Decimal    @default(0)
+    gstCredit     Decimal    @default(0)
+    isBusinessExp Boolean    @default(false)
+    flagged       Boolean    @default(false)
+    flagReason    String?
+    items         LineItem[]
+    createdAt     DateTime   @default(now())
+}
+
+model LineItem {
+    id        String  @id @default(cuid())
+    receiptId String
+    receipt   Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+    name      String
+    quantity  Int     @default(1)
+    price     Decimal
+}
