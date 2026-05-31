@@ -76,6 +76,7 @@ export const receipts = pgTable("Receipt", {
   isBusinessExp: boolean("isBusinessExp").default(false),
   flagged: boolean("flagged").default(false),
   flagReason: text("flagReason"),
+  gstRate: integer("gstRate"),
   createdAt: timestamp("createdAt", { mode: "date" }).defaultNow(),
 });
 
