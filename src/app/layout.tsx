@@ -20,7 +20,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en">
-      <body>
+      <body className="bg-black text-white">
         <TRPCReactProvider>
           {/* 2. Feed the server session explicitly to NextAuth's provider */}
           <SessionProvider session={session}>
