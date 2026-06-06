@@ -17,9 +17,20 @@ const CATEGORIES = [
 
 export const profileRouter = createTRPCRouter({
   get: protectedProcedure.query(async ({ ctx }) => {
-    return ctx.db.query.userProfiles.findFirst({
+    const profile = await ctx.db.query.userProfiles.findFirst({
       where: eq(userProfiles.userId, ctx.session.user.id),
     });
+    if (!profile) {
+      return {
+        id: "",
+        userId: ctx.session.user.id,
+        profession: "",
+        taxRegime: "new" as const,
+        monthlyBudgets: {} as Record<string, number>,
+      };
+    }
+
+    return profile;
   }),
 
   upsert: protectedProcedure

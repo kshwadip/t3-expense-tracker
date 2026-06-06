@@ -2,12 +2,14 @@ import "~/styles/globals.css";
 import { type Metadata } from "next";
 import { SessionProvider } from "next-auth/react";
 import { TRPCReactProvider } from "~/trpc/react";
-import { auth } from "~/server/auth"; // Import your NextAuth auth configuration wrapper
+import { auth } from "~/server/auth";
+import { BottomNav } from "./_components/nav";
 
 export const runtime = "nodejs";
 
 export const metadata: Metadata = {
-  title: "Expense Tracker",
+  title: "ExpenseAI",
+  description: "AI-powered receipt tracking for India",
 };
 
 export default async function RootLayout({
@@ -15,16 +17,18 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // 1. Fetch the authenticated session on the server side
   const session = await auth();
 
   return (
     <html lang="en">
-      <body className="bg-black text-white">
+      <body className="bg-[#0a0a0f] text-[#e8e0d0] antialiased">
         <TRPCReactProvider>
-          {/* 2. Feed the server session explicitly to NextAuth's provider */}
           <SessionProvider session={session}>
-            {children}
+            {/* Bottom padding only when nav is visible (logged-in users) */}
+            <div className={session ? "pb-15" : ""}>
+              {children}
+            </div>
+            <BottomNav />
           </SessionProvider>
         </TRPCReactProvider>
       </body>
