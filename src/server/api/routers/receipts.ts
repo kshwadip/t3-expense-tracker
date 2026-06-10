@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { receipts, lineItems } from "~/server/db/schema";
 import { uploadReceiptImage } from "~/lib/supabase";
@@ -96,6 +96,8 @@ export const receiptsRouter = createTRPCRouter({
 
         const validatedData = ReceiptExtractionSchema.parse(JSON.parse(rawJsonText));
 
+        const gstCredit = validatedData.isBusinessExp ? validatedData.tax : 0;
+
         await ctx.db.transaction(async (tx) => {
           await tx
             .update(receipts)
@@ -111,6 +113,7 @@ export const receiptsRouter = createTRPCRouter({
               currency: validatedData.currency,
               isBusinessExp: validatedData.isBusinessExp,
               gstRate: validatedData.gstRate ? validatedData.gstRate.toString() : null,
+              gstCredit: gstCredit.toString(),
               status: "done",
             })
             .where(eq(receipts.id, receiptRecord.id));
@@ -136,5 +139,38 @@ export const receiptsRouter = createTRPCRouter({
         await ctx.db.update(receipts).set({ status: "failed" }).where(eq(receipts.id, receiptRecord.id));
         throw new Error("AI extraction failed.");
       }
+    }),
+
+  getAll: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.db.query.receipts.findMany({
+      where: eq(receipts.userId, ctx.session.user.id),
+      orderBy: desc(receipts.createdAt),
+      with: { items: true },
+    });
+  }),
+
+  getById: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db.query.receipts.findFirst({
+        where: and(
+          eq(receipts.id, input.id),
+          eq(receipts.userId, ctx.session.user.id),
+        ),
+        with: { items: true },
+      });
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .delete(receipts)
+        .where(
+          and(
+            eq(receipts.id, input.id),
+            eq(receipts.userId, ctx.session.user.id),
+          ),
+        );
     }),
 });
