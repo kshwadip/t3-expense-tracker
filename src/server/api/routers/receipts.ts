@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { receipts, lineItems } from "~/server/db/schema";
 import { uploadReceiptImage } from "~/lib/supabase";
@@ -33,6 +33,28 @@ const ReceiptExtractionSchema = z.object({
   gstRate: z.number().nullable(),
 });
 
+// CSV helpers
+const CSV_HEADERS = [
+  "Date",
+  "Merchant",
+  "Category",
+  "Subtotal (INR)",
+  "GST Rate (%)",
+  "GST Amount (INR)",
+  "Fees (INR)",
+  "Fines (INR)",
+  "Total (INR)",
+  "Currency",
+  "Business Expense",
+  "ITC Claimable (INR)",
+  "Flagged",
+  "Flag Reason",
+];
+
+function escapeCell(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`;
+}
+
 export const receiptsRouter = createTRPCRouter({
   upload: protectedProcedure
     .input(z.object({
@@ -54,7 +76,6 @@ export const receiptsRouter = createTRPCRouter({
       if (!receiptRecord) throw new Error("Failed to initialize receipt log");
 
       try {
-        // Use Groq's super-fast Llama 3 vision model
         const response = await groq.chat.completions.create({
           model: "meta-llama/llama-4-scout-17b-16e-instruct",
           response_format: { type: "json_object" },
@@ -62,8 +83,8 @@ export const receiptsRouter = createTRPCRouter({
             {
               role: "user",
               content: [
-                { 
-                  type: "text", 
+                {
+                  type: "text",
                   text: `Analyze this receipt. Return a raw JSON object matching this schema:
                   {
                     "merchant": string,
@@ -78,7 +99,7 @@ export const receiptsRouter = createTRPCRouter({
                     "currency": string,
                     "isBusinessExp": boolean,
                     "gstRate": number
-                  }` 
+                  }`,
                 },
                 {
                   type: "image_url",
@@ -95,7 +116,6 @@ export const receiptsRouter = createTRPCRouter({
         if (!rawJsonText) throw new Error("AI returned empty response");
 
         const validatedData = ReceiptExtractionSchema.parse(JSON.parse(rawJsonText));
-
         const gstCredit = validatedData.isBusinessExp ? validatedData.tax : 0;
 
         await ctx.db.transaction(async (tx) => {
@@ -119,35 +139,42 @@ export const receiptsRouter = createTRPCRouter({
             .where(eq(receipts.id, receiptRecord.id));
 
           if (validatedData.items.length > 0) {
-            const lineItemsToInsert = validatedData.items.map((item) => ({
-              receiptId: receiptRecord.id,
-              name: item.name,
-              quantity: item.quantity,
-              price: item.price.toString(),
-            }));
-            await tx.insert(lineItems).values(lineItemsToInsert);
+            await tx.insert(lineItems).values(
+              validatedData.items.map((item) => ({
+                receiptId: receiptRecord.id,
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price.toString(),
+              })),
+            );
           }
         });
 
         return await ctx.db.query.receipts.findFirst({
           where: eq(receipts.id, receiptRecord.id),
-          with: { items: true }
+          with: { items: true },
         });
 
       } catch (error) {
         console.error("AI Extraction Failed:", error);
-        await ctx.db.update(receipts).set({ status: "failed" }).where(eq(receipts.id, receiptRecord.id));
+        await ctx.db
+          .update(receipts)
+          .set({ status: "failed" })
+          .where(eq(receipts.id, receiptRecord.id));
         throw new Error("AI extraction failed.");
       }
     }),
 
-  getAll: protectedProcedure.query(async ({ ctx }) => {
-    return ctx.db.query.receipts.findMany({
-      where: eq(receipts.userId, ctx.session.user.id),
-      orderBy: desc(receipts.createdAt),
-      with: { items: true },
-    });
-  }),
+  getAll: protectedProcedure
+    .input(z.object({ limit: z.number().default(50) }).optional())
+    .query(async ({ ctx, input }) => {
+      return ctx.db.query.receipts.findMany({
+        where: eq(receipts.userId, ctx.session.user.id),
+        orderBy: desc(receipts.createdAt),
+        limit: input?.limit ?? 50,
+        with: { items: true },
+      });
+    }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
@@ -172,5 +199,88 @@ export const receiptsRouter = createTRPCRouter({
             eq(receipts.userId, ctx.session.user.id),
           ),
         );
+    }),
+
+  setBusinessExp: protectedProcedure
+    .input(z.object({ id: z.string(), isBusinessExp: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const receipt = await ctx.db.query.receipts.findFirst({
+        where: and(
+          eq(receipts.id, input.id),
+          eq(receipts.userId, ctx.session.user.id),
+        ),
+      });
+      if (!receipt) throw new Error("Receipt not found");
+
+      const gstCredit = input.isBusinessExp ? parseFloat(receipt.tax ?? "0") : 0;
+
+      const [updated] = await ctx.db
+        .update(receipts)
+        .set({ isBusinessExp: input.isBusinessExp, gstCredit: gstCredit.toString() })
+        .where(eq(receipts.id, input.id))
+        .returning();
+
+      return updated;
+    }),
+
+  exportCsv: protectedProcedure
+    .input(
+      z.object({
+        startDate: z.string().optional(), // "YYYY-MM-DD"
+        endDate: z.string().optional(),   // "YYYY-MM-DD"
+        businessOnly: z.boolean().default(false),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const conditions = [
+        eq(receipts.userId, ctx.session.user.id),
+        eq(receipts.status, "done"),
+      ];
+
+      if (input.startDate) {
+        conditions.push(gte(receipts.date, new Date(input.startDate)));
+      }
+      if (input.endDate) {
+        const end = new Date(input.endDate);
+        end.setHours(23, 59, 59, 999);
+        conditions.push(lte(receipts.date, end));
+      }
+      if (input.businessOnly) {
+        conditions.push(eq(receipts.isBusinessExp, true));
+      }
+
+      const rows = await ctx.db.query.receipts.findMany({
+        where: and(...conditions),
+        orderBy: asc(receipts.date),
+      });
+
+      const dataRows = rows.map((r) =>
+        [
+          r.date ? r.date.toISOString().split("T")[0] : "",
+          r.merchant ?? "",
+          r.category ?? "",
+          r.subtotal ?? "0",
+          r.gstRate ?? "0",
+          r.tax ?? "0",
+          r.fees ?? "0",
+          r.fines ?? "0",
+          r.total ?? "0",
+          r.currency,
+          r.isBusinessExp ? "Yes" : "No",
+          r.gstCredit ?? "0",
+          r.flagged ? "Yes" : "No",
+          r.flagReason ?? "",
+        ]
+          .map(String)
+          .map(escapeCell)
+          .join(","),
+      );
+
+      const csv = [
+        CSV_HEADERS.map(escapeCell).join(","),
+        ...dataRows,
+      ].join("\n");
+
+      return { csv, count: rows.length };
     }),
 });

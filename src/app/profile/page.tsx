@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api } from "~/trpc/react";
+import { SignOut } from "../_components/signin";
 
 const CATEGORIES = [
   "Food & Dining",
@@ -196,6 +197,7 @@ export default function ProfilePage() {
                 ? "✓ Saved"
                 : "Save Profile"}
           </button>
+          <SignOut />
         </div>
       </div>
     </div>

@@ -46,6 +46,11 @@ const CATEGORY_ICONS: Record<string, string> = {
   Other: "📦",
 };
 
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(value: string | null, currency = "INR") {
@@ -66,7 +71,226 @@ function fmtDate(date: Date | null) {
   });
 }
 
-// ── Step 2: Skeleton ──────────────────────────────────────────────────────────
+function toDateStr(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// ── Export Panel ──────────────────────────────────────────────────────────────
+
+function ExportPanel({ onClose }: { onClose: () => void }) {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  const [startMonth, setStartMonth] = useState(currentMonth);
+  const [startYear, setStartYear] = useState(currentYear);
+  const [endMonth, setEndMonth] = useState(currentMonth);
+  const [endYear, setEndYear] = useState(currentYear);
+  const [businessOnly, setBusinessOnly] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const startDate = toDateStr(startYear, startMonth, 1);
+  const endDate = toDateStr(endYear, endMonth, new Date(endYear, endMonth, 0).getDate());
+
+  const { data, isFetching } = api.receipts.exportCsv.useQuery(
+    { startDate, endDate, businessOnly },
+    { enabled },
+  );
+
+  const years = Array.from({ length: 5 }, (_, i) => currentYear - i);
+
+  function handleGenerate() {
+    setEnabled(true);
+    setCopied(false);
+  }
+
+  function handleDownload() {
+    if (!data?.csv) return;
+    const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expenses_${startDate}_to_${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleCopy() {
+    if (!data?.csv) return;
+    try {
+      await navigator.clipboard.writeText(data.csv);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Fallback: share via Web Share API on Android
+      if (navigator.share) {
+        const file = new File([data.csv], `expenses_${startDate}_to_${endDate}.csv`, {
+          type: "text/csv",
+        });
+        await navigator.share({ files: [file] }).catch(() => null);
+      }
+    }
+  }
+
+  const hasResult = !!data && !isFetching;
+
+  return (
+    <div className="border border-[#f5a62330] bg-[#12121c] rounded-xl overflow-hidden">
+      {/* Panel header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e2e]">
+        <p className="text-[10px] text-[#f5a623] tracking-[0.28em] uppercase">
+          Export CSV · CA Handoff
+        </p>
+        <button
+          onClick={onClose}
+          className="text-[#3a3a5e] hover:text-[#6a6a8a] text-sm transition-colors"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="px-4 py-4 space-y-4">
+        {/* Date range */}
+        <div className="space-y-2">
+          <p className="text-[9px] text-[#4a4a6a] tracking-[0.2em] uppercase">
+            Date Range
+          </p>
+
+          {/* Start */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-[#4a4a6a] w-8">From</span>
+            <select
+              value={startMonth}
+              onChange={(e) => { setStartMonth(Number(e.target.value)); setEnabled(false); }}
+              className="flex-1 bg-[#0a0a0f] border border-[#2a2a3e] rounded-lg px-2.5 py-1.5 text-xs text-[#e8e0d0] focus:outline-none focus:border-[#f5a623] transition-colors"
+            >
+              {MONTHS.map((m, i) => (
+                <option key={m} value={i + 1}>{m}</option>
+              ))}
+            </select>
+            <select
+              value={startYear}
+              onChange={(e) => { setStartYear(Number(e.target.value)); setEnabled(false); }}
+              className="bg-[#0a0a0f] border border-[#2a2a3e] rounded-lg px-2.5 py-1.5 text-xs text-[#e8e0d0] focus:outline-none focus:border-[#f5a623] transition-colors"
+            >
+              {years.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* End */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-[#4a4a6a] w-8">To</span>
+            <select
+              value={endMonth}
+              onChange={(e) => { setEndMonth(Number(e.target.value)); setEnabled(false); }}
+              className="flex-1 bg-[#0a0a0f] border border-[#2a2a3e] rounded-lg px-2.5 py-1.5 text-xs text-[#e8e0d0] focus:outline-none focus:border-[#f5a623] transition-colors"
+            >
+              {MONTHS.map((m, i) => (
+                <option key={m} value={i + 1}>{m}</option>
+              ))}
+            </select>
+            <select
+              value={endYear}
+              onChange={(e) => { setEndYear(Number(e.target.value)); setEnabled(false); }}
+              className="bg-[#0a0a0f] border border-[#2a2a3e] rounded-lg px-2.5 py-1.5 text-xs text-[#e8e0d0] focus:outline-none focus:border-[#f5a623] transition-colors"
+            >
+              {years.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Business only toggle */}
+        <button
+          onClick={() => { setBusinessOnly((v) => !v); setEnabled(false); }}
+          className={`flex items-center gap-3 w-full text-left transition-colors`}
+        >
+          <div
+            className={`w-9 h-5 rounded-full border transition-all flex items-center px-0.5 ${
+              businessOnly
+                ? "bg-[#f5a62320] border-[#f5a623]"
+                : "bg-[#0a0a0f] border-[#2a2a3e]"
+            }`}
+          >
+            <div
+              className={`w-3.5 h-3.5 rounded-full transition-all ${
+                businessOnly
+                  ? "bg-[#f5a623] translate-x-4"
+                  : "bg-[#3a3a5e] translate-x-0"
+              }`}
+            />
+          </div>
+          <span className="text-xs text-[#c8c0b0]">Business expenses only</span>
+        </button>
+
+        {/* Generate button */}
+        <button
+          onClick={handleGenerate}
+          disabled={isFetching}
+          className="w-full py-2.5 bg-[#f5a623] text-[#0a0a0f] text-xs font-bold tracking-widest uppercase rounded-lg hover:bg-[#f7b740] disabled:opacity-50 transition-all"
+        >
+          {isFetching ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="w-3.5 h-3.5 border-2 border-[#0a0a0f] border-t-transparent rounded-full animate-spin" />
+              Building…
+            </span>
+          ) : (
+            "Generate CSV"
+          )}
+        </button>
+
+        {/* Result */}
+        {hasResult && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 py-2 px-3 bg-[#0a0a0f] border border-[#2a2a3e] rounded-lg">
+              <span className="text-lg">🧾</span>
+              <div>
+                <p className="text-sm text-[#e8e0d0]">
+                  {data.count} receipt{data.count !== 1 ? "s" : ""}
+                </p>
+                <p className="text-[10px] text-[#4a4a6a]">
+                  {MONTHS[startMonth - 1]} {startYear} → {MONTHS[endMonth - 1]} {endYear}
+                  {businessOnly ? " · Biz only" : ""}
+                </p>
+              </div>
+            </div>
+
+            {data.count === 0 ? (
+              <p className="text-[10px] text-[#4a4a6a] text-center py-1">
+                No receipts found for this range.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleDownload}
+                  className="py-2.5 border border-[#f5a62340] text-[#f5a623] text-xs tracking-widest uppercase rounded-lg hover:bg-[#f5a62310] transition-all"
+                >
+                  ↓ Download
+                </button>
+                <button
+                  onClick={() => void handleCopy()}
+                  className={`py-2.5 border text-xs tracking-widest uppercase rounded-lg transition-all ${
+                    copied
+                      ? "border-[#2adb7a40] text-[#2adb7a]"
+                      : "border-[#2a2a3e] text-[#6a6a8a] hover:border-[#3a3a5e] hover:text-[#c8c0b0]"
+                  }`}
+                >
+                  {copied ? "✓ Copied" : "Copy / Share"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Skeleton ──────────────────────────────────────────────────────────────────
 
 function ReceiptSkeleton() {
   return (
@@ -93,7 +317,7 @@ function ReceiptSkeleton() {
   );
 }
 
-// ── Step 3: Status Badge ──────────────────────────────────────────────────────
+// ── Status Badge ──────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "done") {
@@ -121,7 +345,7 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-// ── Step 4 & 5: Receipt Card (expand + delete) ────────────────────────────────
+// ── Receipt Card ──────────────────────────────────────────────────────────────
 
 function ReceiptCard({
   receipt,
@@ -130,10 +354,7 @@ function ReceiptCard({
   receipt: Receipt;
   onDeleted: (id: string) => void;
 }) {
-  // Step 4: expand/collapse state
   const [expanded, setExpanded] = useState(false);
-
-  // Step 5: delete confirmation state
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const deleteMutation = api.receipts.delete.useMutation({
@@ -159,12 +380,11 @@ function ReceiptCard({
           : "border-[#2a2a3e]"
       }`}
     >
-      {/* ── Card header — always visible ── */}
+      {/* Card header */}
       <div
         className={`px-4 py-3.5 ${canExpand ? "cursor-pointer active:bg-[#ffffff04]" : ""}`}
         onClick={() => canExpand && setExpanded((v) => !v)}
       >
-        {/* Row 1: merchant + status badge */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
             <p className="text-sm text-[#e8e0d0] font-mono truncate">
@@ -177,7 +397,6 @@ function ReceiptCard({
           <StatusBadge status={receipt.status} />
         </div>
 
-        {/* Row 2: category + total + expand chevron */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm">
@@ -186,7 +405,6 @@ function ReceiptCard({
             <span className="text-[10px] text-[#6a6a8a]">
               {receipt.category ?? "Uncategorised"}
             </span>
-            {/* Badges */}
             {receipt.isBusinessExp && (
               <span className="text-[8px] font-mono tracking-wider uppercase border border-[#2adb7a30] text-[#2adb7a] px-1.5 py-0.5 rounded-full">
                 Biz
@@ -215,7 +433,6 @@ function ReceiptCard({
           </div>
         </div>
 
-        {/* GST credit callout — only if non-zero */}
         {gstCreditVal > 0 && (
           <div className="mt-2 flex items-center gap-1.5">
             <span className="text-[9px] text-[#2adb7a] font-mono tracking-wider">
@@ -225,10 +442,9 @@ function ReceiptCard({
         )}
       </div>
 
-      {/* ── Step 4: Expanded line items ── */}
+      {/* Expanded section */}
       {expanded && (
         <div className="border-t border-[#1e1e2e]">
-          {/* Line items */}
           <div className="px-4 py-3 space-y-2">
             <p className="text-[9px] text-[#4a4a6a] tracking-[0.2em] uppercase mb-2">
               Line Items
@@ -236,9 +452,7 @@ function ReceiptCard({
             {receipt.items.map((item) => (
               <div key={item.id} className="flex items-center justify-between">
                 <span className="text-xs text-[#c8c0b0] flex-1 min-w-0 truncate">
-                  {item.quantity && item.quantity > 1
-                    ? `${item.quantity}× `
-                    : ""}
+                  {item.quantity && item.quantity > 1 ? `${item.quantity}× ` : ""}
                   {item.name}
                 </span>
                 <span className="text-xs text-[#e8e0d0] font-mono shrink-0 ml-3">
@@ -248,7 +462,6 @@ function ReceiptCard({
             ))}
           </div>
 
-          {/* Subtotals */}
           {(receipt.subtotal ?? receipt.tax) && (
             <div className="px-4 pb-3 pt-1 border-t border-[#1e1e2e] space-y-1">
               {receipt.subtotal && (
@@ -278,7 +491,6 @@ function ReceiptCard({
             </div>
           )}
 
-          {/* Flag reason if present */}
           {receipt.flagReason && (
             <div className="px-4 pb-3">
               <p className="text-[10px] text-[#ef4444] bg-[#ef444410] border border-[#ef444420] rounded-lg px-3 py-2">
@@ -287,7 +499,6 @@ function ReceiptCard({
             </div>
           )}
 
-          {/* ── Step 5: Delete section ── */}
           <div className="px-4 pb-3 pt-1 border-t border-[#1e1e2e]">
             {!confirmDelete ? (
               <button
@@ -298,9 +509,7 @@ function ReceiptCard({
               </button>
             ) : (
               <div className="flex items-center justify-between">
-                <p className="text-[10px] text-[#ef4444]">
-                  Delete permanently?
-                </p>
+                <p className="text-[10px] text-[#ef4444]">Delete permanently?</p>
                 <div className="flex gap-3">
                   <button
                     onClick={() => setConfirmDelete(false)}
@@ -328,14 +537,14 @@ function ReceiptCard({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ReceiptsPage() {
+  const [showExport, setShowExport] = useState(false);
+
   const {
     data: allReceipts,
     isLoading,
     refetch,
     isRefetching,
   } = api.receipts.getAll.useQuery(undefined, {
-    // Auto-refetch every 5 s when any receipt is still processing,
-    // so the status badge updates without a manual refresh.
     refetchInterval: (query) => {
       const data = query.state.data as Receipt[] | undefined;
       const hasProcessing = data?.some((r) => r.status === "processing");
@@ -343,8 +552,6 @@ export default function ReceiptsPage() {
     },
   });
 
-  // Optimistic removal — the card disappears instantly on delete confirm
-  // instead of waiting for the next getAll refetch.
   const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
   const handleDeleted = (id: string) => {
     setDeletedIds((prev) => new Set(prev).add(id));
@@ -359,7 +566,7 @@ export default function ReceiptsPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-[#e8e0d0] font-mono pb-24">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="sticky top-0 z-10 bg-[#0a0a0f] border-b border-[#1e1e2e] px-4 py-4">
         <p className="text-[10px] text-[#f5a623] tracking-[0.35em] uppercase mb-1">
           History
@@ -379,31 +586,55 @@ export default function ReceiptsPage() {
             )}
           </div>
 
-          {/* Refresh button */}
-          <button
-            onClick={() => void refetch()}
-            disabled={isRefetching}
-            className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#2a2a3e] text-[#4a4a6a] hover:text-[#f5a623] hover:border-[#f5a62350] transition-all disabled:opacity-40"
-            title="Refresh"
-          >
-            <svg
-              width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth={2} strokeLinecap="round"
-              strokeLinejoin="round"
-              className={isRefetching ? "animate-spin" : ""}
+          <div className="flex items-center gap-2">
+            {/* Export button */}
+            <button
+              onClick={() => setShowExport((v) => !v)}
+              className={`h-8 px-2.5 flex items-center gap-1.5 rounded-lg border text-[9px] tracking-[0.15em] uppercase font-mono transition-all ${
+                showExport
+                  ? "border-[#f5a623] text-[#f5a623] bg-[#f5a62310]"
+                  : "border-[#2a2a3e] text-[#4a4a6a] hover:border-[#3a3a5e] hover:text-[#6a6a8a]"
+              }`}
             >
-              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-            </svg>
-          </button>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Export
+            </button>
+
+            {/* Refresh button */}
+            <button
+              onClick={() => void refetch()}
+              disabled={isRefetching}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#2a2a3e] text-[#4a4a6a] hover:text-[#f5a623] hover:border-[#f5a62350] transition-all disabled:opacity-40"
+              title="Refresh"
+            >
+              <svg
+                width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+                className={isRefetching ? "animate-spin" : ""}
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="px-4 py-5">
-        {/* ── Step 2: Loading skeleton ── */}
+      <div className="px-4 py-5 space-y-4">
+        {/* Export panel */}
+        {showExport && (
+          <ExportPanel onClose={() => setShowExport(false)} />
+        )}
+
+        {/* Loading skeleton */}
         {isLoading && <ReceiptSkeleton />}
 
-        {/* ── Step 3–5: Receipt cards ── */}
+        {/* Receipt cards */}
         {!isLoading && receipts && receipts.length > 0 && (
           <div className="space-y-3">
             {receipts.map((receipt) => (
@@ -416,8 +647,8 @@ export default function ReceiptsPage() {
           </div>
         )}
 
-        {/* ── Empty state ── */}
-        {!isLoading && receipts?.length === 0 && (
+        {/* Empty state */}
+        {!isLoading && receipts?.length === 0 && !showExport && (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <span className="text-5xl mb-5 opacity-30">🧾</span>
             <p className="text-[#4a4a6a] text-sm mb-1">No receipts yet</p>
