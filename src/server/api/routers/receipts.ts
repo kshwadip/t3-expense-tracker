@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { receipts, lineItems } from "~/server/db/schema";
-import { uploadReceiptImage } from "~/lib/supabase";
+import { uploadReceiptImage, deleteReceiptImage } from "~/lib/supabase";
+import { aiUploadLimiter, MAX_AI_UPLOADS_PER_HOUR } from "~/server/lib/rate-limit";
 import OpenAI from "openai";
 
 // Initialize Groq using the OpenAI SDK architecture
@@ -16,13 +18,15 @@ const ReceiptExtractionSchema = z.object({
   date: z.string().nullable(),
   category: z.enum([
     "Food & Dining", "Groceries", "Transport", "Healthcare",
-    "Shopping", "Entertainment", "Utilities", "Taxes & Fees", "Other"
+    "Shopping", "Entertainment", "Utilities", "Taxes & Fees", "Other",
   ]),
-  items: z.array(z.object({
-    name: z.string(),
-    quantity: z.number(),
-    price: z.number(),
-  })),
+  items: z.array(
+    z.object({
+      name: z.string(),
+      quantity: z.number(),
+      price: z.number(),
+    }),
+  ),
   subtotal: z.number(),
   tax: z.number(),
   fees: z.number(),
@@ -57,17 +61,33 @@ function escapeCell(v: string): string {
 
 export const receiptsRouter = createTRPCRouter({
   upload: protectedProcedure
-    .input(z.object({
-      fileName: z.string(),
-      mimeType: z.string(),
-      fileBase64: z.string(),
-    }))
+    .input(
+      z.object({
+        fileName: z.string(),
+        mimeType: z.string(),
+        fileBase64: z.string(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
+      // ── Rate limit check ────────────────────────────────────────────────
+      const rl = aiUploadLimiter.check(ctx.session.user.id);
+      if (!rl.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `AI extraction limit reached (${MAX_AI_UPLOADS_PER_HOUR}/hr). Try again in ${rl.resetInSeconds}s.`,
+        });
+      }
+
+      // ── Upload image to Supabase Storage ────────────────────────────────
       const buffer = Buffer.from(input.fileBase64, "base64");
       const imageUrl = await uploadReceiptImage(
-        buffer, input.fileName, input.mimeType, ctx.session.user.id,
+        buffer,
+        input.fileName,
+        input.mimeType,
+        ctx.session.user.id,
       );
 
+      // ── Create receipt row in DB ────────────────────────────────────────
       const [receiptRecord] = await ctx.db
         .insert(receipts)
         .values({ userId: ctx.session.user.id, imageUrl, status: "processing" })
@@ -76,6 +96,7 @@ export const receiptsRouter = createTRPCRouter({
       if (!receiptRecord) throw new Error("Failed to initialize receipt log");
 
       try {
+        // ── Groq Vision extraction ────────────────────────────────────────
         const response = await groq.chat.completions.create({
           model: "meta-llama/llama-4-scout-17b-16e-instruct",
           response_format: { type: "json_object" },
@@ -115,7 +136,9 @@ export const receiptsRouter = createTRPCRouter({
         const rawJsonText = response.choices[0]?.message.content;
         if (!rawJsonText) throw new Error("AI returned empty response");
 
-        const validatedData = ReceiptExtractionSchema.parse(JSON.parse(rawJsonText));
+        const validatedData = ReceiptExtractionSchema.parse(
+          JSON.parse(rawJsonText),
+        );
         const gstCredit = validatedData.isBusinessExp ? validatedData.tax : 0;
 
         await ctx.db.transaction(async (tx) => {
@@ -132,7 +155,9 @@ export const receiptsRouter = createTRPCRouter({
               total: validatedData.total.toString(),
               currency: validatedData.currency,
               isBusinessExp: validatedData.isBusinessExp,
-              gstRate: validatedData.gstRate ? validatedData.gstRate.toString() : null,
+              gstRate: validatedData.gstRate
+                ? validatedData.gstRate.toString()
+                : null,
               gstCredit: gstCredit.toString(),
               status: "done",
             })
@@ -154,7 +179,6 @@ export const receiptsRouter = createTRPCRouter({
           where: eq(receipts.id, receiptRecord.id),
           with: { items: true },
         });
-
       } catch (error) {
         console.error("AI Extraction Failed:", error);
         await ctx.db
@@ -191,6 +215,19 @@ export const receiptsRouter = createTRPCRouter({
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Fetch first to get the imageUrl before deleting the row
+      const receipt = await ctx.db.query.receipts.findFirst({
+        where: and(
+          eq(receipts.id, input.id),
+          eq(receipts.userId, ctx.session.user.id),
+        ),
+      });
+
+      if (!receipt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Receipt not found." });
+      }
+
+      // Delete DB row (cascades to lineItems via FK)
       await ctx.db
         .delete(receipts)
         .where(
@@ -199,6 +236,10 @@ export const receiptsRouter = createTRPCRouter({
             eq(receipts.userId, ctx.session.user.id),
           ),
         );
+
+      // Delete image from Supabase Storage — fire after DB so a failed
+      // storage delete never orphans the DB row
+      await deleteReceiptImage(receipt.imageUrl);
     }),
 
   setBusinessExp: protectedProcedure
@@ -210,13 +251,18 @@ export const receiptsRouter = createTRPCRouter({
           eq(receipts.userId, ctx.session.user.id),
         ),
       });
-      if (!receipt) throw new Error("Receipt not found");
+      if (!receipt) throw new TRPCError({ code: "NOT_FOUND", message: "Receipt not found." });
 
-      const gstCredit = input.isBusinessExp ? parseFloat(receipt.tax ?? "0") : 0;
+      const gstCredit = input.isBusinessExp
+        ? parseFloat(receipt.tax ?? "0")
+        : 0;
 
       const [updated] = await ctx.db
         .update(receipts)
-        .set({ isBusinessExp: input.isBusinessExp, gstCredit: gstCredit.toString() })
+        .set({
+          isBusinessExp: input.isBusinessExp,
+          gstCredit: gstCredit.toString(),
+        })
         .where(eq(receipts.id, input.id))
         .returning();
 
