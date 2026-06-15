@@ -25,7 +25,7 @@ export const profileRouter = createTRPCRouter({
         id: "",
         userId: ctx.session.user.id,
         profession: "",
-        taxRegime: "new" as const,
+        taxRegime: "new",
         monthlyBudgets: {} as Record<string, number>,
       };
     }
@@ -51,7 +51,7 @@ export const profileRouter = createTRPCRouter({
       const payload = {
         profession: input.profession ?? null,
         taxRegime: input.taxRegime,
-        monthlyBudgets: (input.monthlyBudgets as Record<string, number>) ?? null,
+        monthlyBudgets: input.monthlyBudgets ?? null,
       };
 
       if (existing) {
