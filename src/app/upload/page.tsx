@@ -158,7 +158,7 @@ export default function UploadPage() {
         )}
 
         {/* ── Extraction Result ── */}
-        {result && result.status === "done" && (
+        {result?.status === "done" && (
           <div className="space-y-3">
             <p className="text-[10px] text-[#f5a623] tracking-[0.28em] uppercase">
               Extracted Data
