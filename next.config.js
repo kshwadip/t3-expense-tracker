@@ -2,9 +2,7 @@ import "./src/env.js";
 
 /** @type {import("next").NextConfig} */
 const config = {
-  experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "prisma"],
-  },
+  serverExternalPackages: ["@prisma/client", "prisma"],
   webpack: (config, { isServer }) => {
     if (isServer) {
       config.experiments = {

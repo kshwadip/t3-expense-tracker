@@ -26,7 +26,7 @@ export const profileRouter = createTRPCRouter({
         userId: ctx.session.user.id,
         profession: "",
         taxRegime: "new",
-        monthlyBudgets: {} as Record<string, number>,
+        monthlyBudgets: {},
       };
     }
 

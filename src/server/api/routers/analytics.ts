@@ -86,11 +86,11 @@ export const analyticsRouter = createTRPCRouter({
       > = {};
       for (const r of done) {
         const cat = r.category ?? "Other";
-        byCategory[cat] ??= { spend: 0, tax: 0, itc: 0, count: 0 };
-        byCategory[cat]!.spend += parseFloat(r.total ?? "0");
-        byCategory[cat]!.tax += parseFloat(r.tax ?? "0");
-        byCategory[cat]!.itc += parseFloat(r.gstCredit ?? "0");
-        byCategory[cat]!.count += 1;
+        const catEntry = (byCategory[cat] ??= { spend: 0, tax: 0, itc: 0, count: 0 });
+        catEntry.spend += parseFloat(r.total ?? "0");
+        catEntry.tax += parseFloat(r.tax ?? "0");
+        catEntry.itc += parseFloat(r.gstCredit ?? "0");
+        catEntry.count += 1;
       }
 
       const budgets =
@@ -157,10 +157,10 @@ export const analyticsRouter = createTRPCRouter({
         month: "short",
         year: "2-digit",
       });
-      byMonth[key] ??= { spend: 0, tax: 0, itc: 0, label };
-      byMonth[key]!.spend += parseFloat(r.total ?? "0");
-      byMonth[key]!.tax += parseFloat(r.tax ?? "0");
-      byMonth[key]!.itc += parseFloat(r.gstCredit ?? "0");
+      const monthEntry = (byMonth[key] ??= { spend: 0, tax: 0, itc: 0, label });
+      monthEntry.spend += parseFloat(r.total ?? "0");
+      monthEntry.tax += parseFloat(r.tax ?? "0");
+      monthEntry.itc += parseFloat(r.gstCredit ?? "0");
     }
 
     return Object.entries(byMonth)

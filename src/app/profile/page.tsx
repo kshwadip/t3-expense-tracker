@@ -61,7 +61,7 @@ export default function ProfilePage() {
       profession: profession || undefined,
       taxRegime,
       monthlyBudgets: Object.keys(cleanBudgets).length
-        ? (cleanBudgets as Record<Category, number>)
+        ? cleanBudgets
         : undefined,
     });
     setSaved(true);

@@ -34,7 +34,7 @@ export default function UploadPage() {
 
   const upload = api.receipts.upload.useMutation({
     onSuccess: (data) => {
-      if (data) setResult(data as ReceiptResult);
+      if (data) setResult(data);
     },
     onError: (err) => {
       alert(`Upload failed: ${err.message}`);
