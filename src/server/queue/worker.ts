@@ -9,7 +9,7 @@
  */
 
 import http from "http";
-import { Worker, type Job } from "bullmq";
+import { Worker, type Job, type ConnectionOptions } from "bullmq";
 import OpenAI from "openai";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -167,14 +167,14 @@ async function processReceipt(job: Job<ExtractionJobData>) {
 const connection = makeWorkerConnection();
 
 const worker = new Worker<ExtractionJobData>(QUEUE_NAME, processReceipt, {
-  connection: connection as any,
+  connection: connection as unknown as ConnectionOptions,
   concurrency: 2,
 });
 
-worker.on("failed", async (job, err) => {
+worker.on("failed", (job, err) => {
   console.error(`[worker] job=${job?.id} FAILED: ${err.message}`);
   if (job?.data.receiptId) {
-    await db
+    void db
       .update(schema.receipts)
       .set({ status: "failed" })
       .where(eq(schema.receipts.id, job.data.receiptId))

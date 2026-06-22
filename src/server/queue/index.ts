@@ -1,4 +1,4 @@
-import { Queue } from "bullmq";
+import { Queue, type ConnectionOptions } from "bullmq";
 import IORedis from "ioredis";
 
 export type ExtractionJobData = {
@@ -31,8 +31,8 @@ function makeConnection() {
  */
 export async function enqueueExtractionJob(data: ExtractionJobData): Promise<void> {
   const connection = makeConnection();
-  const queue = new Queue<ExtractionJobData, any, string>(QUEUE_NAME, { 
-    connection: connection as any 
+  const queue = new Queue<ExtractionJobData, unknown, string>(QUEUE_NAME, {
+    connection: connection as unknown as ConnectionOptions,
   });
 
   await queue.add("extract", data, {
