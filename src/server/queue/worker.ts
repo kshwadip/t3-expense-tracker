@@ -167,7 +167,7 @@ async function processReceipt(job: Job<ExtractionJobData>) {
 const connection = makeWorkerConnection();
 
 const worker = new Worker<ExtractionJobData>(QUEUE_NAME, processReceipt, {
-  connection,
+  connection: connection as any,
   concurrency: 2,
 });
 

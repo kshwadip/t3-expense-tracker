@@ -31,7 +31,9 @@ function makeConnection() {
  */
 export async function enqueueExtractionJob(data: ExtractionJobData): Promise<void> {
   const connection = makeConnection();
-  const queue = new Queue<ExtractionJobData>(QUEUE_NAME, { connection });
+  const queue = new Queue<ExtractionJobData, any, string>(QUEUE_NAME, { 
+    connection: connection as any 
+  });
 
   await queue.add("extract", data, {
     attempts: 3,
