@@ -2,7 +2,8 @@ import "./src/env.js";
 
 /** @type {import("next").NextConfig} */
 const config = {
-  serverExternalPackages: ["@prisma/client", "prisma"],
+  // Prevent Next.js from bundling native-heavy packages — let Node require them
+  serverExternalPackages: ["ioredis", "bullmq"],
   webpack: (config, { isServer }) => {
     if (isServer) {
       config.experiments = {

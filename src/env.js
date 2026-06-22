@@ -14,6 +14,8 @@ export const env = createEnv({
       .enum(["development", "test", "production"])
       .default("development"),
     SUPABASE_SERVICE_ROLE_KEY: z.string(),
+    // Upstash Redis — shared by Vercel (producer) and Render worker (consumer)
+    REDIS_URL: z.string().min(1),
   },
 
   client: {
@@ -28,6 +30,7 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    REDIS_URL: process.env.REDIS_URL,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   },
