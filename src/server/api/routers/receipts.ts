@@ -1,13 +1,39 @@
 import { z } from "zod";
-import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, avg, desc, eq, gte, lte } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import OpenAI from "openai";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { receipts, lineItems } from "~/server/db/schema";
 import { uploadReceiptImage, deleteReceiptImage } from "~/lib/supabase";
 import { aiUploadLimiter, MAX_AI_UPLOADS_PER_HOUR } from "~/server/lib/rate-limit";
-import { enqueueExtractionJob } from "~/server/queue";
 
-// CSV helpers
+const groq = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1",
+});
+
+const ReceiptExtractionSchema = z.object({
+  merchant: z.string(),
+  date: z.string().nullable(),
+  category: z.enum([
+    "Food & Dining", "Groceries", "Transport", "Healthcare",
+    "Shopping", "Entertainment", "Utilities", "Taxes & Fees", "Other",
+  ]),
+  items: z.array(z.object({
+    name: z.string(),
+    quantity: z.number(),
+    price: z.number(),
+  })),
+  subtotal: z.number(),
+  tax: z.number(),
+  fees: z.number(),
+  fines: z.number(),
+  total: z.number(),
+  currency: z.string().default("INR"),
+  isBusinessExp: z.boolean(),
+  gstRate: z.number().nullable(),
+});
+
 const CSV_HEADERS = [
   "Date", "Merchant", "Category", "Subtotal (INR)", "GST Rate (%)",
   "GST Amount (INR)", "Fees (INR)", "Fines (INR)", "Total (INR)", "Currency",
@@ -41,7 +67,7 @@ export const receiptsRouter = createTRPCRouter({
         buffer, input.fileName, input.mimeType, ctx.session.user.id,
       );
 
-      // ── Insert processing row ───────────────────────────────────────────
+      // ── Create receipt row ──────────────────────────────────────────────
       const [receiptRecord] = await ctx.db
         .insert(receipts)
         .values({ userId: ctx.session.user.id, imageUrl, status: "processing" })
@@ -49,17 +75,103 @@ export const receiptsRouter = createTRPCRouter({
 
       if (!receiptRecord) throw new Error("Failed to create receipt record");
 
-      // ── Push job to Upstash Redis — returns immediately ─────────────────
-      // The Render worker picks this up, calls Groq, and updates the DB row.
-      // The frontend polls getById every 3s until status !== "processing".
-      await enqueueExtractionJob({
-        receiptId: receiptRecord.id,
-        imageUrl,
-        userId: ctx.session.user.id,
-        mimeType: input.mimeType,
-      });
+      // ── Groq Vision extraction ──────────────────────────────────────────
+      try {
+        const response = await groq.chat.completions.create({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          response_format: { type: "json_object" },
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analyze this receipt. Return a raw JSON object matching this schema:
+{
+  "merchant": string,
+  "date": "YYYY-MM-DD" or null,
+  "category": "Food & Dining" | "Groceries" | "Transport" | "Healthcare" | "Shopping" | "Entertainment" | "Utilities" | "Taxes & Fees" | "Other",
+  "items": [{"name": string, "quantity": number, "price": number}],
+  "subtotal": number, "tax": number, "fees": number, "fines": number, "total": number,
+  "currency": string, "isBusinessExp": boolean, "gstRate": number
+}`,
+              },
+              {
+                type: "image_url",
+                image_url: { url: `data:${input.mimeType};base64,${input.fileBase64}` },
+              },
+            ],
+          }],
+        });
 
-      return receiptRecord;
+        const rawJson = response.choices[0]?.message.content;
+        if (!rawJson) throw new Error("AI returned empty response");
+
+        const data = ReceiptExtractionSchema.parse(JSON.parse(rawJson));
+        const gstCredit = data.isBusinessExp ? data.tax : 0;
+
+        // ── Anomaly detection ─────────────────────────────────────────────
+        const avgResult = await ctx.db
+          .select({ categoryAvg: avg(receipts.total) })
+          .from(receipts)
+          .where(and(
+            eq(receipts.userId, ctx.session.user.id),
+            eq(receipts.category, data.category),
+            eq(receipts.status, "done"),
+          ));
+
+        const categoryAvg = parseFloat(avgResult[0]?.categoryAvg ?? "0");
+        const flagged = categoryAvg > 0 && data.total > categoryAvg * 3;
+        const flagReason = flagged
+          ? `Unusually high: ₹${data.total.toFixed(2)} vs avg ₹${categoryAvg.toFixed(2)} in ${data.category}`
+          : null;
+
+        // ── Persist in transaction ────────────────────────────────────────
+        await ctx.db.transaction(async (tx) => {
+          await tx.update(receipts).set({
+            merchant: data.merchant,
+            date: data.date ? new Date(data.date) : null,
+            category: data.category,
+            subtotal: data.subtotal.toString(),
+            tax: data.tax.toString(),
+            fees: data.fees.toString(),
+            fines: data.fines.toString(),
+            total: data.total.toString(),
+            currency: data.currency,
+            isBusinessExp: data.isBusinessExp,
+            gstRate: data.gstRate?.toString() ?? null,
+            gstCredit: gstCredit.toString(),
+            flagged,
+            flagReason,
+            status: "done",
+          }).where(eq(receipts.id, receiptRecord.id));
+
+          if (data.items.length > 0) {
+            await tx.insert(lineItems).values(
+              data.items.map((item) => ({
+                receiptId: receiptRecord.id,
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price.toString(),
+              })),
+            );
+          }
+        });
+
+        return ctx.db.query.receipts.findFirst({
+          where: eq(receipts.id, receiptRecord.id),
+          with: { items: true },
+        });
+
+      } catch (error) {
+        console.error("AI extraction failed:", error);
+        await ctx.db.update(receipts)
+          .set({ status: "failed" })
+          .where(eq(receipts.id, receiptRecord.id));
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "AI extraction failed. Try a clearer photo.",
+        });
+      }
     }),
 
   getAll: protectedProcedure

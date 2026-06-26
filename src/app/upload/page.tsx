@@ -3,19 +3,6 @@
 import { useState, useRef } from "react";
 import { api } from "~/trpc/react";
 
-type Receipt = {
-  id: string;
-  merchant: string | null;
-  date: Date | null;
-  category: string | null;
-  total: string | null;
-  tax: string | null;
-  subtotal: string | null;
-  currency: string;
-  isBusinessExp: boolean | null;
-  status: string;
-};
-
 function fmt(n: string | null) {
   if (!n) return "—";
   return new Intl.NumberFormat("en-IN", {
@@ -27,28 +14,12 @@ export default function UploadPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
-  // ID of the receipt currently being processed by the worker
-  const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // ── Mutation — uploads image + enqueues job, returns immediately ──────────
   const upload = api.receipts.upload.useMutation({
-    onSuccess: (data) => {
-      if (data) setProcessingId(data.id);
-    },
-    onError: (err) => {
-      alert(`Upload failed: ${err.message}`);
-    },
+    onError: (err) => alert(`Upload failed: ${err.message}`),
   });
 
-  // ── Poll getById every 3 s until the worker marks it done/failed ──────────
-  const { data: receipt } = api.receipts.getById.useQuery(
-    { id: processingId! },
-    {
-      enabled: !!processingId,
-      refetchInterval: (query) =>
-        query.state.data?.status === "processing" ? 3_000 : false,
-    },
-  );
+  const receipt = upload.data;
 
   async function processFile(file: File) {
     if (!file.type.startsWith("image/")) {
@@ -56,7 +27,7 @@ export default function UploadPage() {
       return;
     }
     setPreview(URL.createObjectURL(file));
-    setProcessingId(null);
+    upload.reset();
 
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -79,20 +50,14 @@ export default function UploadPage() {
     if (file) void processFile(file);
   }
 
-  // Uploading = mutation in flight (Supabase upload + enqueue)
-  const isUploading = upload.isPending;
-  // Processing = mutation done, worker is extracting
-  const isProcessing = !!processingId && receipt?.status === "processing";
-  const isActive = isUploading || isProcessing;
-
-  const overlayText = isUploading ? "Uploading…" : "Analyzing…";
-
   function reset() {
     setPreview(null);
-    setProcessingId(null);
     upload.reset();
+    if (fileRef.current) fileRef.current.value = "";
     fileRef.current?.click();
   }
+
+  const isAnalyzing = upload.isPending;
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-[#e8e0d0] font-mono pb-24">
@@ -107,12 +72,12 @@ export default function UploadPage() {
       <div className="px-4 py-6 space-y-6 max-w-md mx-auto">
         {/* Drop / tap zone */}
         <div
-          onClick={() => !isActive && fileRef.current?.click()}
+          onClick={() => !isAnalyzing && fileRef.current?.click()}
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
           className={`relative rounded-2xl border-2 border-dashed transition-all duration-200 overflow-hidden ${
-            isActive ? "cursor-default" : "cursor-pointer"
+            isAnalyzing ? "cursor-default" : "cursor-pointer"
           } ${
             dragging
               ? "border-[#f5a623] bg-[#f5a62308]"
@@ -128,11 +93,11 @@ export default function UploadPage() {
                 alt="Receipt preview"
                 className="w-full object-contain max-h-64 opacity-60"
               />
-              {isActive && (
+              {isAnalyzing && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a0f80] backdrop-blur-sm">
                   <div className="w-8 h-8 border-2 border-[#f5a623] border-t-transparent rounded-full animate-spin mb-3" />
                   <p className="text-xs text-[#f5a623] tracking-widest uppercase animate-pulse">
-                    {overlayText}
+                    Analyzing…
                   </p>
                 </div>
               )}
@@ -156,8 +121,8 @@ export default function UploadPage() {
           onChange={handleFileChange}
         />
 
-        {/* Scan another — only when idle and a preview exists */}
-        {preview && !isActive && (
+        {/* Scan another */}
+        {preview && !isAnalyzing && (
           <button
             onClick={reset}
             className="w-full py-2.5 text-xs tracking-widest uppercase text-[#4a4a6a] border border-[#2a2a3e] rounded-xl hover:border-[#3a3a5e] hover:text-[#6a6a8a] transition-all"
@@ -193,19 +158,27 @@ export default function UploadPage() {
               <Row label="Total" value={fmt(receipt.total)} highlight accent />
             </div>
             <div className="flex gap-2 flex-wrap">
-              <span
-                className={`text-[9px] tracking-[0.15em] uppercase px-2.5 py-1 rounded-full border font-mono ${
-                  receipt.isBusinessExp
-                    ? "border-[#2adb7a40] text-[#2adb7a]"
-                    : "border-[#2a2a3e] text-[#4a4a6a]"
-                }`}
-              >
+              <span className={`text-[9px] tracking-[0.15em] uppercase px-2.5 py-1 rounded-full border font-mono ${
+                receipt.isBusinessExp
+                  ? "border-[#2adb7a40] text-[#2adb7a]"
+                  : "border-[#2a2a3e] text-[#4a4a6a]"
+              }`}>
                 {receipt.isBusinessExp ? "✓ Business Expense" : "Personal"}
               </span>
               <span className="text-[9px] tracking-[0.15em] uppercase px-2.5 py-1 rounded-full border border-[#2adb7a40] text-[#2adb7a] font-mono">
                 ✓ Saved
               </span>
+              {receipt.flagged && (
+                <span className="text-[9px] tracking-[0.15em] uppercase px-2.5 py-1 rounded-full border border-[#ef444440] text-[#ef4444] font-mono">
+                  ⚠ Flagged
+                </span>
+              )}
             </div>
+            {receipt.flagReason && (
+              <p className="text-[10px] text-[#ef4444] bg-[#ef444410] border border-[#ef444420] rounded-lg px-3 py-2">
+                {receipt.flagReason}
+              </p>
+            )}
           </div>
         )}
 
